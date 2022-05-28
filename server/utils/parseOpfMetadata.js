@@ -1,5 +1,5 @@
 const { xmlToJSON } = require('./index')
-const { stripHtml } = require("string-strip-html")
+const htmlSanitizer = require('./htmlSanitizer')
 
 function parseCreators(metadata) {
   if (!metadata['dc:creator']) return null
@@ -57,8 +57,7 @@ function fetchDescription(metadata) {
   // check if description is HTML or plain text. only plain text allowed
   // calibre stores < and > as &lt; and &gt;
   description = description.replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-  if (description.match(/<!DOCTYPE html>|<\/?\s*[a-z-][^>]*\s*>|(\&(?:[\w\d]+|#\d+|#x[a-f\d]+);)/)) return stripHtml(description).result
-  return description
+  return htmlSanitizer.stripAllTags(description)
 }
 
 function fetchGenres(metadata) {
@@ -70,14 +69,14 @@ function fetchLanguage(metadata) {
   return fetchTagString(metadata, 'dc:language')
 }
 
-function fetchSeries(metadata) {
-  if (typeof metadata.meta == "undefined") return null
-  return fetchTagString(metadata.meta, "calibre:series")
+function fetchSeries(metadataMeta) {
+  if (!metadataMeta) return null
+  return fetchTagString(metadataMeta, "calibre:series")
 }
 
-function fetchVolumeNumber(metadata) {
-  if (typeof metadata.meta == "undefined") return null
-  return fetchTagString(metadata.meta, "calibre:series_index")
+function fetchVolumeNumber(metadataMeta) {
+  if (!metadataMeta) return null
+  return fetchTagString(metadataMeta, "calibre:series_index")
 }
 
 function fetchNarrators(creators, metadata) {
@@ -91,21 +90,42 @@ function fetchNarrators(creators, metadata) {
   }
 }
 
+function fetchTags(metadata) {
+  if (!metadata['dc:tag'] || !metadata['dc:tag'].length) return []
+  return metadata['dc:tag'].filter(tag => (typeof tag === 'string'))
+}
+
+function stripPrefix(str) {
+  if (!str) return ''
+  return str.split(':').pop()
+}
+
 module.exports.parseOpfMetadataXML = async (xml) => {
   var json = await xmlToJSON(xml)
-  if (!json || !json.package || !json.package.metadata) return null
-  var metadata = json.package.metadata
+
+  if (!json) return null
+
+  // Handle <package ...> or with prefix <ns0:package ...>
+  const packageKey = Object.keys(json).find(key => stripPrefix(key) === 'package')
+  if (!packageKey) return null
+  const prefix = packageKey.split(':').shift()
+  var metadata = prefix ? json[packageKey][`${prefix}:metadata`] || json[packageKey].metadata : json[packageKey].metadata
+  if (!metadata) return null
 
   if (Array.isArray(metadata)) {
     if (!metadata.length) return null
     metadata = metadata[0]
   }
 
-  if (typeof metadata.meta != "undefined") {
-    metadata.meta = {}
-    for (var match of xml.matchAll(/<meta name="(?<name>.+)" content="(?<content>.+)"\/>/g)) {
-      metadata.meta[match.groups['name']] = [match.groups['content']]
-    }
+  const metadataMeta = prefix ? metadata[`${prefix}:meta`] || metadata.meta : metadata.meta
+
+  metadata.meta = {}
+  if (metadataMeta && metadataMeta.length) {
+    metadataMeta.forEach((meta) => {
+      if (meta && meta['$'] && meta['$'].name) {
+        metadata.meta[meta['$'].name] = [meta['$'].content || '']
+      }
+    })
   }
 
   var creators = parseCreators(metadata)
@@ -119,8 +139,9 @@ module.exports.parseOpfMetadataXML = async (xml) => {
     description: fetchDescription(metadata),
     genres: fetchGenres(metadata),
     language: fetchLanguage(metadata),
-    series: fetchSeries(metadata),
-    sequence: fetchVolumeNumber(metadata)
+    series: fetchSeries(metadata.meta),
+    sequence: fetchVolumeNumber(metadata.meta),
+    tags: fetchTags(metadata)
   }
   return data
 }

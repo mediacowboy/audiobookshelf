@@ -1,15 +1,15 @@
 <template>
-  <div id="bookshelf" ref="wrapper" class="w-full h-full overflow-y-scroll relative">
+  <div id="bookshelf" ref="wrapper" class="w-full max-w-full h-full overflow-y-scroll relative">
     <!-- Cover size widget -->
     <widgets-cover-size-widget class="fixed bottom-4 right-4 z-30" />
     <!-- Experimental Bookshelf Texture -->
-    <div v-show="showExperimentalFeatures" class="fixed bottom-4 right-28 z-40">
+    <div v-show="showExperimentalFeatures && !isAlternativeBookshelfView" class="fixed bottom-4 right-28 z-40">
       <div class="rounded-full py-1 bg-primary hover:bg-bg cursor-pointer px-2 border border-black-100 text-center flex items-center box-shadow-md" @mousedown.prevent @mouseup.prevent @click="showBookshelfTextureModal"><p class="text-sm py-0.5">Texture</p></div>
     </div>
 
-    <div v-if="loaded && !shelves.length && isRootUser && !search" class="w-full flex flex-col items-center justify-center py-12">
+    <div v-if="loaded && !shelves.length && !search" class="w-full flex flex-col items-center justify-center py-12">
       <p class="text-center text-2xl font-book mb-4 py-4">{{ libraryName }} Library is empty!</p>
-      <div class="flex">
+      <div v-if="userIsAdminOrUp" class="flex">
         <ui-btn to="/config" color="primary" class="w-52 mr-2">Configure Scanner</ui-btn>
         <ui-btn color="success" class="w-52" @click="scan">Scan Library</ui-btn>
       </div>
@@ -17,7 +17,25 @@
     <div v-else-if="loaded && !shelves.length && search" class="w-full h-40 flex items-center justify-center">
       <p class="text-center text-xl font-book py-4">No results for query</p>
     </div>
-    <div v-else class="w-full flex flex-col items-center">
+    <!-- Alternate plain view -->
+    <div v-else-if="isAlternativeBookshelfView" class="w-full mb-24">
+      <template v-for="(shelf, index) in shelves">
+        <widgets-item-slider v-if="shelf.type === 'book' || shelf.type === 'podcast'" :key="index + '.'" :items="shelf.entities" :height="232 * sizeMultiplier" class="bookshelf-row pl-8 my-6">
+          <p class="font-semibold text-gray-100" :style="{ fontSize: sizeMultiplier + 'rem' }">{{ shelf.label }}</p>
+        </widgets-item-slider>
+        <widgets-episode-slider v-else-if="shelf.type === 'episode'" :key="index + '.'" :items="shelf.entities" :height="232 * sizeMultiplier" class="bookshelf-row pl-8 my-6">
+          <p class="font-semibold text-gray-100" :style="{ fontSize: sizeMultiplier + 'rem' }">{{ shelf.label }}</p>
+        </widgets-episode-slider>
+        <widgets-series-slider v-else-if="shelf.type === 'series'" :key="index + '.'" :items="shelf.entities" :height="232 * sizeMultiplier" class="bookshelf-row pl-8 my-6">
+          <p class="font-semibold text-gray-100" :style="{ fontSize: sizeMultiplier + 'rem' }">{{ shelf.label }}</p>
+        </widgets-series-slider>
+        <widgets-authors-slider v-else-if="shelf.type === 'authors'" :key="index + '.'" :items="shelf.entities" :height="192 * sizeMultiplier" class="bookshelf-row pl-8 my-6">
+          <p class="font-semibold text-gray-100" :style="{ fontSize: sizeMultiplier + 'rem' }">{{ shelf.label }}</p>
+        </widgets-authors-slider>
+      </template>
+    </div>
+    <!-- Regular bookshelf view -->
+    <div v-else class="w-full">
       <template v-for="(shelf, index) in shelves">
         <app-book-shelf-row :key="index" :index="index" :shelf="shelf" :size-multiplier="sizeMultiplier" :book-cover-width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" />
       </template>
@@ -44,8 +62,8 @@ export default {
     }
   },
   computed: {
-    isRootUser() {
-      return this.$store.getters['user/getIsRoot']
+    userIsAdminOrUp() {
+      return this.$store.getters['user/getIsAdminOrUp']
     },
     showExperimentalFeatures() {
       return this.$store.state.showExperimentalFeatures
@@ -55,6 +73,12 @@ export default {
     },
     libraryName() {
       return this.$store.getters['libraries/getCurrentLibraryName']
+    },
+    bookshelfView() {
+      return this.$store.getters['getServerSetting']('bookshelfView')
+    },
+    isAlternativeBookshelfView() {
+      return this.bookshelfView === this.$constants.BookshelfView.TITLES
     },
     bookCoverWidth() {
       var coverSize = this.$store.getters['user/getUserSetting']('bookshelfCoverSize')
@@ -166,7 +190,15 @@ export default {
     },
     settingsUpdated(settings) {},
     scan() {
-      this.$store.dispatch('libraries/requestLibraryScan', { libraryId: this.$store.state.libraries.currentLibraryId })
+      this.$store
+        .dispatch('libraries/requestLibraryScan', { libraryId: this.$store.state.libraries.currentLibraryId })
+        .then(() => {
+          this.$toast.success('Library scan started')
+        })
+        .catch((error) => {
+          console.error('Failed to start scan', error)
+          this.$toast.error('Failed to start scan')
+        })
     },
     libraryItemAdded(libraryItem) {
       console.log('libraryItem added', libraryItem)

@@ -2,6 +2,7 @@ import { checkForUpdate } from '@/plugins/version'
 import Vue from 'vue'
 
 export const state = () => ({
+  Source: null,
   versionData: null,
   serverSettings: null,
   streamLibraryItem: null,
@@ -15,13 +16,13 @@ export const state = () => ({
   selectedLibraryItems: [],
   processingBatch: false,
   previousPath: '/',
-  routeHistory: [],
-  isRoutingBack: false,
   showExperimentalFeatures: false,
   backups: [],
   bookshelfBookIds: [],
   openModal: null,
-  selectedBookshelfTexture: '/textures/wood_default.jpg'
+  innerModalOpen: false,
+  selectedBookshelfTexture: '/textures/wood_default.jpg',
+  lastBookshelfScrollData: {}
 })
 
 export const getters = {
@@ -33,7 +34,7 @@ export const getters = {
     return state.serverSettings[key]
   },
   getBookCoverAspectRatio: state => {
-    if (!state.serverSettings || !state.serverSettings.coverAspectRatio) return 1
+    if (!state.serverSettings || isNaN(state.serverSettings.coverAspectRatio)) return 1
     return state.serverSettings.coverAspectRatio === 0 ? 1.6 : 1
   },
   getNumLibraryItemsSelected: state => state.selectedLibraryItems.length,
@@ -74,15 +75,6 @@ export const actions = {
         return false
       })
   },
-  popRoute({ commit, state }) {
-    if (!state.routeHistory.length) {
-      return null
-    }
-    var _history = [...state.routeHistory]
-    var last = _history.pop()
-    commit('setRouteHistory', _history)
-    return last
-  },
   setBookshelfTexture({ commit, state }, img) {
     let root = document.documentElement;
     commit('setBookshelfTexture', img)
@@ -91,14 +83,14 @@ export const actions = {
 }
 
 export const mutations = {
+  setSource(state, source) {
+    state.Source = source
+  },
+  setLastBookshelfScrollData(state, { scrollTop, path, name }) {
+    state.lastBookshelfScrollData[name] = { scrollTop, path }
+  },
   setBookshelfBookIds(state, val) {
     state.bookshelfBookIds = val || []
-  },
-  setRouteHistory(state, val) {
-    state.routeHistory = val
-  },
-  setIsRoutingBack(state, val) {
-    state.isRoutingBack = val
   },
   setPreviousPath(state, val) {
     state.previousPath = val
@@ -185,6 +177,9 @@ export const mutations = {
   },
   setOpenModal(state, val) {
     state.openModal = val
+  },
+  setInnerModalOpen(state, val) {
+    state.innerModalOpen = val
   },
   setBookshelfTexture(state, val) {
     state.selectedBookshelfTexture = val

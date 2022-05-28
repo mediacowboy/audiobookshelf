@@ -2,7 +2,10 @@
   <div class="text-white max-h-screen h-screen overflow-hidden bg-bg">
     <app-appbar />
 
-    <Nuxt />
+    <app-side-rail v-if="isShowingSideRail" class="hidden md:block" />
+    <div id="app-content" class="h-full" :class="{ 'has-siderail': isShowingSideRail }">
+      <Nuxt />
+    </div>
 
     <app-stream-container ref="streamContainer" />
 
@@ -11,6 +14,8 @@
     <modals-edit-collection-modal />
     <modals-bookshelf-texture-modal />
     <modals-podcast-edit-episode />
+    <modals-podcast-view-episode />
+    <modals-authors-edit-modal />
     <readers-reader />
   </div>
 </template>
@@ -44,6 +49,13 @@ export default {
     },
     isCasting() {
       return this.$store.state.globals.isCasting
+    },
+    isShowingSideRail() {
+      if (!this.$route.name) return false
+      return !this.$route.name.startsWith('config') && this.$store.state.libraries.currentLibraryId
+    },
+    appContentMarginLeft() {
+      return this.isShowingSideRail ? 80 : 0
     }
   },
   methods: {
@@ -162,6 +174,7 @@ export default {
       this.$store.commit('libraries/addUpdate', library)
     },
     async libraryRemoved(library) {
+      console.log('Library removed', library)
       this.$store.commit('libraries/remove', library)
 
       // When removed currently selected library then set next accessible library
@@ -180,18 +193,20 @@ export default {
             this.$router.push(`/library/${nextLibrary.id}`)
           }
         } else {
-          console.error('User has no accessible libraries')
+          console.error('User has no more accessible libraries')
+          this.$store.commit('libraries/setCurrentLibrary', null)
         }
       }
     },
     libraryItemAdded(libraryItem) {
-      // this.$store.commit('libraries/updateFilterDataWithAudiobook', libraryItem)
+      this.$store.commit('libraries/updateFilterDataWithItem', libraryItem)
     },
     libraryItemUpdated(libraryItem) {
       if (this.$store.state.selectedLibraryItem && this.$store.state.selectedLibraryItem.id === libraryItem.id) {
         this.$store.commit('setSelectedLibraryItem', libraryItem)
       }
       this.$eventBus.$emit(`${libraryItem.id}_updated`, libraryItem)
+      this.$store.commit('libraries/updateFilterDataWithItem', libraryItem)
     },
     libraryItemRemoved(item) {
       if (this.$route.name.startsWith('item')) {
@@ -548,5 +563,21 @@ export default {
 <style>
 .Vue-Toastification__toast-body.custom-class-1 {
   font-size: 14px;
+}
+
+#app-content {
+  width: 100%;
+}
+#app-content.has-siderail {
+  width: calc(100% - 80px);
+  max-width: calc(100% - 80px);
+  margin-left: 80px;
+}
+@media (max-width: 768px) {
+  #app-content.has-siderail {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0px;
+  }
 }
 </style>

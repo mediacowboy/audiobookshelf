@@ -104,6 +104,15 @@ class Podcast {
   get numTracks() {
     return this.episodes.length
   }
+  get latestEpisodePublished() {
+    var largestPublishedAt = 0
+    this.episodes.forEach((ep) => {
+      if (ep.publishedAt && ep.publishedAt > largestPublishedAt) {
+        largestPublishedAt = ep.publishedAt
+      }
+    })
+    return largestPublishedAt
+  }
 
   update(payload) {
     var json = this.toJSON()
@@ -215,18 +224,10 @@ class Podcast {
     this.episodes.push(pe)
   }
 
-  setEpisodeOrder(episodeIds) {
-    episodeIds.reverse() // episode Ids will already be in descending order
-    this.episodes = this.episodes.map(ep => {
-      var indexOf = episodeIds.findIndex(id => id === ep.id)
-      ep.index = indexOf + 1
-      return ep
-    })
-    this.episodes.sort((a, b) => b.index - a.index)
-  }
-
   reorderEpisodes() {
     var hasUpdates = false
+
+    // TODO: Sort by published date
     this.episodes = naturalSort(this.episodes).asc((ep) => ep.bestFilename)
     for (let i = 0; i < this.episodes.length; i++) {
       if (this.episodes[i].index !== (i + 1)) {

@@ -18,7 +18,7 @@
       <div class="material-icons text-5xl text-white text-opacity-50 hover:text-opacity-90 cursor-pointer pointer-events-auto" @click.stop.prevent="goNextBook" @mousedown.prevent>arrow_forward_ios</div>
     </div>
 
-    <div class="w-full h-full text-sm rounded-b-lg rounded-tr-lg bg-bg shadow-lg border border-black-300 relative">
+    <div class="w-full h-full max-h-full text-sm rounded-b-lg rounded-tr-lg bg-bg shadow-lg border border-black-300 relative">
       <component v-if="libraryItem && show" :is="tabName" :library-item="libraryItem" :processing.sync="processing" @close="show = false" @selectTab="selectTab" />
     </div>
   </modals-modal>
@@ -62,10 +62,9 @@ export default {
           component: 'modals-item-tabs-match'
         },
         {
-          id: 'merge',
-          title: 'Merge',
-          component: 'modals-item-tabs-merge',
-          experimental: true
+          id: 'manage',
+          title: 'Manage',
+          component: 'modals-item-tabs-manage'
         }
       ]
     }
@@ -123,12 +122,12 @@ export default {
       if (!this.userCanUpdate && !this.userCanDownload) return []
       return this.tabs.filter((tab) => {
         if (tab.experimental && !this.showExperimentalFeatures) return false
-        if (tab.id === 'merge' && (this.isMissing || this.mediaType !== 'book')) return false
+        if (tab.id === 'manage' && (this.isMissing || this.mediaType !== 'book')) return false
         if (this.mediaType == 'podcast' && tab.id == 'chapters') return false
         if (this.mediaType == 'book' && tab.id == 'episodes') return false
 
-        if ((tab.id === 'merge' || tab.id === 'files') && this.userCanDownload) return true
-        if (tab.id !== 'merge' && tab.id !== 'files' && this.userCanUpdate) return true
+        if ((tab.id === 'manage' || tab.id === 'files') && this.userCanDownload) return true
+        if (tab.id !== 'manage' && tab.id !== 'files' && this.userCanUpdate) return true
         if (tab.id === 'match' && this.userCanUpdate) return true
         return false
       })

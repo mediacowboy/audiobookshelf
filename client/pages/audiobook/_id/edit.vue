@@ -38,7 +38,7 @@
       </div>
       <draggable v-model="files" v-bind="dragOptions" class="list-group border border-gray-600" draggable=".item" tag="ul" @start="drag = true" @end="drag = false" @update="draggableUpdate">
         <transition-group type="transition" :name="!drag ? 'flip-list' : null">
-          <li v-for="(audio, index) in files" :key="audio.ino" :class="audio.include ? 'item' : 'exclude'" class="w-full list-group-item flex items-center">
+          <li v-for="(audio, index) in files" :key="audio.ino" :class="audio.include ? 'item' : 'exclude'" class="w-full list-group-item flex items-center relative">
             <div class="font-book text-center px-4 py-1 w-12">
               {{ audio.include ? index - numExcluded + 1 : -1 }}
             </div>
@@ -71,7 +71,7 @@
             <div class="font-sans text-xs font-normal w-56">
               {{ audio.error }}
             </div>
-            <div class="font-sans text-xs font-normal w-40 flex justify-center">
+            <div class="font-sans text-xs font-normal w-40 flex items-center justify-center">
               <ui-toggle-switch v-model="audio.include" :off-color="'error'" @input="includeToggled(audio)" />
             </div>
           </li>
@@ -89,9 +89,6 @@ export default {
     draggable
   },
   async asyncData({ store, params, app, redirect, route }) {
-    if (!store.state.user.user) {
-      return redirect(`/login?redirect=${route.path}`)
-    }
     if (!store.getters['user/getUserCanUpdate']) {
       return redirect('/?error=unauthorized')
     }
@@ -162,9 +159,6 @@ export default {
     },
     streamLibraryItem() {
       return this.$store.state.streamLibraryItem
-    },
-    showExperimentalFeatures() {
-      return this.$store.state.showExperimentalFeatures
     }
   },
   methods: {

@@ -21,13 +21,15 @@ const BookCoverAspectRatio = {
 
 const BookshelfView = {
   STANDARD: 0,
-  TITLES: 1
+  TITLES: 1,
+  AUTHOR: 2 // Books shown on author page
 }
 
 const PlayMethod = {
   DIRECTPLAY: 0,
   DIRECTSTREAM: 1,
-  TRANSCODE: 2
+  TRANSCODE: 2,
+  LOCAL: 3
 }
 
 const Constants = {

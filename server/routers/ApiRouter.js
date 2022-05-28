@@ -25,7 +25,7 @@ const Series = require('../objects/entities/Series')
 const FileSystemController = require('../controllers/FileSystemController')
 
 class ApiRouter {
-  constructor(db, auth, scanner, playbackSessionManager, abMergeManager, coverManager, backupManager, watcher, cacheManager, podcastManager, emitter, clientEmitter) {
+  constructor(db, auth, scanner, playbackSessionManager, abMergeManager, coverManager, backupManager, watcher, cacheManager, podcastManager, audioMetadataManager, rssFeedManager, emitter, clientEmitter) {
     this.db = db
     this.auth = auth
     this.scanner = scanner
@@ -36,6 +36,8 @@ class ApiRouter {
     this.watcher = watcher
     this.cacheManager = cacheManager
     this.podcastManager = podcastManager
+    this.audioMetadataManager = audioMetadataManager
+    this.rssFeedManager = rssFeedManager
     this.emitter = emitter
     this.clientEmitter = clientEmitter
 
@@ -88,9 +90,11 @@ class ApiRouter {
     this.router.post('/items/:id/play', LibraryItemController.middleware.bind(this), LibraryItemController.startPlaybackSession.bind(this))
     this.router.post('/items/:id/play/:episodeId', LibraryItemController.middleware.bind(this), LibraryItemController.startEpisodePlaybackSession.bind(this))
     this.router.patch('/items/:id/tracks', LibraryItemController.middleware.bind(this), LibraryItemController.updateTracks.bind(this))
-    this.router.patch('/items/:id/episodes', LibraryItemController.middleware.bind(this), LibraryItemController.updateEpisodes.bind(this))
-    this.router.delete('/items/:id/episode/:episodeId', LibraryItemController.middleware.bind(this), LibraryItemController.removeEpisode.bind(this))
-    this.router.get('/items/:id/scan', LibraryItemController.middleware.bind(this), LibraryItemController.scan.bind(this)) // Root only
+    this.router.get('/items/:id/scan', LibraryItemController.middleware.bind(this), LibraryItemController.scan.bind(this))
+    this.router.get('/items/:id/audio-metadata', LibraryItemController.middleware.bind(this), LibraryItemController.updateAudioFileMetadata.bind(this))
+    this.router.post('/items/:id/chapters', LibraryItemController.middleware.bind(this), LibraryItemController.updateMediaChapters.bind(this))
+    this.router.post('/items/:id/open-feed', LibraryItemController.middleware.bind(this), LibraryItemController.openRSSFeed.bind(this))
+    this.router.post('/items/:id/close-feed', LibraryItemController.middleware.bind(this), LibraryItemController.closeRSSFeed.bind(this))
 
     this.router.post('/items/batch/delete', LibraryItemController.batchDelete.bind(this))
     this.router.post('/items/batch/update', LibraryItemController.batchUpdate.bind(this))
@@ -105,7 +109,7 @@ class ApiRouter {
     this.router.patch('/users/:id', UserController.update.bind(this))
     this.router.delete('/users/:id', UserController.delete.bind(this))
 
-    this.router.get('/users/:id/listening-sessions', UserController.getListeningStats.bind(this))
+    this.router.get('/users/:id/listening-sessions', UserController.getListeningSessions.bind(this))
     this.router.get('/users/:id/listening-stats', UserController.getListeningStats.bind(this))
 
     //
@@ -178,11 +182,12 @@ class ApiRouter {
     //
     this.router.post('/podcasts', PodcastController.create.bind(this))
     this.router.post('/podcasts/feed', PodcastController.getPodcastFeed.bind(this))
-    this.router.get('/podcasts/:id/checknew', PodcastController.checkNewEpisodes.bind(this))
-    this.router.get('/podcasts/:id/downloads', PodcastController.getEpisodeDownloads.bind(this))
-    this.router.get('/podcasts/:id/clear-queue', PodcastController.clearEpisodeDownloadQueue.bind(this))
-    this.router.post('/podcasts/:id/download-episodes', PodcastController.downloadEpisodes.bind(this))
-    this.router.patch('/podcasts/:id/episode/:episodeId', PodcastController.updateEpisode.bind(this))
+    this.router.get('/podcasts/:id/checknew', PodcastController.middleware.bind(this), PodcastController.checkNewEpisodes.bind(this))
+    this.router.get('/podcasts/:id/downloads', PodcastController.middleware.bind(this), PodcastController.getEpisodeDownloads.bind(this))
+    this.router.get('/podcasts/:id/clear-queue', PodcastController.middleware.bind(this), PodcastController.clearEpisodeDownloadQueue.bind(this))
+    this.router.post('/podcasts/:id/download-episodes', PodcastController.middleware.bind(this), PodcastController.downloadEpisodes.bind(this))
+    this.router.patch('/podcasts/:id/episode/:episodeId', PodcastController.middleware.bind(this), PodcastController.updateEpisode.bind(this))
+    this.router.delete('/podcasts/:id/episode/:episodeId', PodcastController.middleware.bind(this), PodcastController.removeEpisode.bind(this))
 
     //
     // Misc Routes
@@ -199,6 +204,7 @@ class ApiRouter {
     this.router.get('/search/books', MiscController.findBooks.bind(this))
     this.router.get('/search/podcast', MiscController.findPodcasts.bind(this))
     this.router.get('/search/authors', MiscController.findAuthor.bind(this))
+    this.router.get('/search/chapters', MiscController.findChapters.bind(this))
     this.router.get('/tags', MiscController.getAllTags.bind(this))
   }
 
@@ -234,8 +240,11 @@ class ApiRouter {
   //
   // Helper Methods
   //
-  userJsonWithItemProgressDetails(user) {
+  userJsonWithItemProgressDetails(user, hideRootToken = false) {
     var json = user.toJSONForBrowser()
+    if (json.type === 'root' && hideRootToken) {
+      json.token = ''
+    }
 
     json.mediaProgress = json.mediaProgress.map(lip => {
       var libraryItem = this.db.libraryItems.find(li => li.id === lip.id)

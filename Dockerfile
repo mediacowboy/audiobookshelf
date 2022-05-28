@@ -2,7 +2,7 @@
 FROM node:16-alpine AS build
 WORKDIR /client
 COPY /client /client
-RUN npm install
+RUN npm ci && npm cache clean --force
 RUN npm run generate
 
 ### STAGE 1: Build server ###
@@ -14,6 +14,6 @@ COPY index.js index.js
 COPY package-lock.json package-lock.json
 COPY package.json package.json
 COPY server server
-RUN npm ci --production
+RUN npm ci --only=production
 EXPOSE 80
 CMD ["npm", "start"]

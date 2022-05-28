@@ -140,7 +140,6 @@ class FolderWatcher extends EventEmitter {
       return
     }
     Logger.debug(`[Watcher] Rename ${pathFrom} => ${pathTo}`)
-    this.addFileUpdate(libraryId, pathFrom, 'renamed')
     this.addFileUpdate(libraryId, pathTo, 'renamed')
   }
 
@@ -162,13 +161,6 @@ class FolderWatcher extends EventEmitter {
       return
     }
     var folderFullPath = folder.fullPath.replace(/\\/g, '/')
-
-    // Check if file was added to root directory
-    var dir = Path.dirname(path)
-    if (dir === folderFullPath) {
-      Logger.warn(`[Watcher] New file "${Path.basename(path)}" added to folder root - ignoring it`)
-      return
-    }
 
     var relPath = path.replace(folderFullPath, '')
 

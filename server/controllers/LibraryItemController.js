@@ -17,6 +17,11 @@ class LibraryItemController {
         item.userMediaProgress = req.user.getMediaProgress(item.id, episodeId)
       }
 
+      if (includeEntities.includes('rssfeed')) {
+        var feedData = this.rssFeedManager.findFeedForItem(item.id)
+        item.rssFeedUrl = feedData ? feedData.feedUrl : null
+      }
+
       if (item.mediaType == 'book') {
         if (includeEntities.includes('authors')) {
           item.media.metadata.authors = item.media.metadata.authors.map(au => {
@@ -46,7 +51,6 @@ class LibraryItemController {
 
     var hasUpdates = libraryItem.update(req.body)
     if (hasUpdates) {
-
       // Turn on podcast auto download cron if not already on
       if (libraryItem.mediaType == 'podcast' && req.body.media.autoDownloadEpisodes && !this.podcastManager.episodeScheduleTask) {
         this.podcastManager.schedulePodcastEpisodeCron()
@@ -184,8 +188,8 @@ class LibraryItemController {
       Logger.error(`[LibraryItemController] startPlaybackSession cannot playback ${req.libraryItem.id}`)
       return res.sendStatus(404)
     }
-    const options = req.body || {}
-    this.playbackSessionManager.startSessionRequest(req.user, req.libraryItem, null, options, res)
+
+    this.playbackSessionManager.startSessionRequest(req, res, null)
   }
 
   // POST: api/items/:id/play/:episodeId
@@ -201,8 +205,7 @@ class LibraryItemController {
       return res.sendStatus(404)
     }
 
-    const options = req.body || {}
-    this.playbackSessionManager.startSessionRequest(req.user, libraryItem, episodeId, options, res)
+    this.playbackSessionManager.startSessionRequest(req, res, episodeId)
   }
 
   // PATCH: api/items/:id/tracks
@@ -214,38 +217,6 @@ class LibraryItemController {
       return res.sendStatus(500)
     }
     libraryItem.media.updateAudioTracks(orderedFileData)
-    await this.db.updateLibraryItem(libraryItem)
-    this.emitter('item_updated', libraryItem.toJSONExpanded())
-    res.json(libraryItem.toJSON())
-  }
-
-  // PATCH: api/items/:id/episodes
-  async updateEpisodes(req, res) { // For updating podcast episode order
-    var libraryItem = req.libraryItem
-    var orderedFileData = req.body.episodes
-    if (!libraryItem.media.setEpisodeOrder) {
-      Logger.error(`[LibraryItemController] updateEpisodes invalid media type ${libraryItem.id}`)
-      return res.sendStatus(500)
-    }
-    libraryItem.media.setEpisodeOrder(orderedFileData)
-    await this.db.updateLibraryItem(libraryItem)
-    this.emitter('item_updated', libraryItem.toJSONExpanded())
-    res.json(libraryItem.toJSON())
-  }
-
-  // DELETE: api/items/:id/episode/:episodeId
-  async removeEpisode(req, res) {
-    var episodeId = req.params.episodeId
-    var libraryItem = req.libraryItem
-    if (libraryItem.mediaType !== 'podcast') {
-      Logger.error(`[LibraryItemController] removeEpisode invalid media type ${libraryItem.id}`)
-      return res.sendStatus(500)
-    }
-    if (!libraryItem.media.episodes.find(ep => ep.id === episodeId)) {
-      Logger.error(`[LibraryItemController] removeEpisode episode ${episodeId} not found for item ${libraryItem.id}`)
-      return res.sendStatus(404)
-    }
-    libraryItem.media.removeEpisode(episodeId)
     await this.db.updateLibraryItem(libraryItem)
     this.emitter('item_updated', libraryItem.toJSONExpanded())
     res.json(libraryItem.toJSON())
@@ -326,8 +297,8 @@ class LibraryItemController {
 
   // DELETE: api/items/all
   async deleteAll(req, res) {
-    if (!req.user.isRoot) {
-      Logger.warn('User other than root attempted to delete all library items', req.user)
+    if (!req.user.isAdminOrUp) {
+      Logger.warn('User other than admin attempted to delete all library items', req.user)
       return res.sendStatus(403)
     }
     Logger.info('Removing all Library Items')
@@ -336,10 +307,10 @@ class LibraryItemController {
     else res.sendStatus(500)
   }
 
-  // GET: api/items/:id/scan (Root)
+  // GET: api/items/:id/scan (admin)
   async scan(req, res) {
-    if (!req.user.isRoot) {
-      Logger.error(`[LibraryItemController] Non-root user attempted to scan library item`, req.user)
+    if (!req.user.isAdminOrUp) {
+      Logger.error(`[LibraryItemController] Non-admin user attempted to scan library item`, req.user)
       return res.sendStatus(403)
     }
 
@@ -354,17 +325,90 @@ class LibraryItemController {
     })
   }
 
+  // GET: api/items/:id/audio-metadata
+  async updateAudioFileMetadata(req, res) {
+    if (!req.user.isAdminOrUp) {
+      Logger.error(`[LibraryItemController] Non-root user attempted to update audio metadata`, req.user)
+      return res.sendStatus(403)
+    }
+
+    if (req.libraryItem.isMissing || !req.libraryItem.hasAudioFiles || !req.libraryItem.isBook) {
+      Logger.error(`[LibraryItemController] Invalid library item`)
+      return res.sendStatus(500)
+    }
+
+    this.audioMetadataManager.updateAudioFileMetadataForItem(req.user, req.libraryItem)
+    res.sendStatus(200)
+  }
+
+  // POST: api/items/:id/chapters
+  async updateMediaChapters(req, res) {
+    if (!req.user.canUpdate) {
+      Logger.error(`[LibraryItemController] User attempted to update chapters with invalid permissions`, req.user.username)
+      return res.sendStatus(403)
+    }
+
+    if (req.libraryItem.isMissing || !req.libraryItem.hasAudioFiles || !req.libraryItem.isBook) {
+      Logger.error(`[LibraryItemController] Invalid library item`)
+      return res.sendStatus(500)
+    }
+
+    const chapters = req.body.chapters || []
+    if (!chapters.length) {
+      Logger.error(`[LibraryItemController] Invalid payload`)
+      return res.sendStatus(400)
+    }
+
+    const wasUpdated = req.libraryItem.media.updateChapters(chapters)
+    if (wasUpdated) {
+      await this.db.updateLibraryItem(req.libraryItem)
+      this.emitter('item_updated', req.libraryItem.toJSONExpanded())
+    }
+
+    res.json({
+      success: true,
+      updated: wasUpdated
+    })
+  }
+
+  // POST: api/items/:id/open-feed
+  async openRSSFeed(req, res) {
+    if (!req.user.isAdminOrUp) {
+      Logger.error(`[LibraryItemController] Non-admin user attempted to open RSS feed`, req.user.username)
+      return res.sendStatus(500)
+    }
+
+    const feedData = this.rssFeedManager.openFeedForItem(req.user, req.libraryItem, req.body)
+    if (feedData.error) {
+      return res.json({
+        success: false,
+        error: feedData.error
+      })
+    }
+
+    res.json({
+      success: true,
+      feedUrl: feedData.feedUrl
+    })
+  }
+
+  async closeRSSFeed(req, res) {
+    if (!req.user.isAdminOrUp) {
+      Logger.error(`[LibraryItemController] Non-admin user attempted to close RSS feed`, req.user.username)
+      return res.sendStatus(500)
+    }
+
+    this.rssFeedManager.closeFeedForItem(req.params.id)
+
+    res.sendStatus(200)
+  }
+
   middleware(req, res, next) {
     var item = this.db.libraryItems.find(li => li.id === req.params.id)
     if (!item || !item.media) return res.sendStatus(404)
 
-    // Check user can access this library
-    if (!req.user.checkCanAccessLibrary(item.libraryId)) {
-      return res.sendStatus(403)
-    }
-
     // Check user can access this library item
-    if (!req.user.checkCanAccessLibraryItemWithTags(item.media.tags)) {
+    if (!req.user.checkCanAccessLibraryItem(item)) {
       return res.sendStatus(403)
     }
 

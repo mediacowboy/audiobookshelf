@@ -1,23 +1,27 @@
 <template>
   <div class="w-full h-full relative">
-    <widgets-book-details-edit v-if="mediaType == 'book'" ref="itemDetailsEdit" :library-item="libraryItem" @submit="submitForm" />
-    <widgets-podcast-details-edit v-else ref="itemDetailsEdit" :library-item="libraryItem" @submit="submitForm" />
+    <div id="formWrapper" class="w-full overflow-y-auto">
+      <widgets-book-details-edit v-if="mediaType == 'book'" ref="itemDetailsEdit" :library-item="libraryItem" @submit="saveAndClose" />
+      <widgets-podcast-details-edit v-else ref="itemDetailsEdit" :library-item="libraryItem" @submit="saveAndClose" />
+    </div>
 
-    <div class="absolute bottom-0 left-0 w-full py-4 bg-bg" :class="isScrollable ? 'box-shadow-md-up' : 'box-shadow-sm-up border-t border-primary border-opacity-50'">
+    <div class="absolute bottom-0 left-0 w-full py-4 bg-bg" :class="isScrollable ? 'box-shadow-md-up' : 'border-t border-white border-opacity-5'">
       <div class="flex items-center px-4">
         <ui-btn v-if="userCanDelete" color="error" type="button" class="h-8" :padding-x="3" small @click.stop.prevent="removeItem">Remove</ui-btn>
 
         <div class="flex-grow" />
 
         <ui-tooltip v-if="mediaType == 'book'" :disabled="!!quickMatching" :text="`(Root User Only) Populate empty book details & cover with first book result from '${libraryProvider}'. Does not overwrite details.`" direction="bottom" class="mr-4">
-          <ui-btn v-if="isRootUser" :loading="quickMatching" color="bg" type="button" class="h-full" small @click.stop.prevent="quickMatch">Quick Match</ui-btn>
+          <ui-btn v-if="userIsAdminOrUp" :loading="quickMatching" color="bg" type="button" class="h-full" small @click.stop.prevent="quickMatch">Quick Match</ui-btn>
         </ui-tooltip>
 
         <ui-tooltip :disabled="!!libraryScan" text="(Root User Only) Rescan audiobook including metadata" direction="bottom" class="mr-4">
-          <ui-btn v-if="isRootUser && !isFile" :loading="rescanning" :disabled="!!libraryScan" color="bg" type="button" class="h-full" small @click.stop.prevent="rescan">Re-Scan</ui-btn>
+          <ui-btn v-if="userIsAdminOrUp && !isFile" :loading="rescanning" :disabled="!!libraryScan" color="bg" type="button" class="h-full" small @click.stop.prevent="rescan">Re-Scan</ui-btn>
         </ui-tooltip>
 
-        <ui-btn @click="submitForm">Submit</ui-btn>
+        <ui-btn @click="save" class="mx-2">Save</ui-btn>
+
+        <ui-btn @click="saveAndClose">Save & Close</ui-btn>
       </div>
     </div>
   </div>
@@ -52,8 +56,8 @@ export default {
     isFile() {
       return !!this.libraryItem && this.libraryItem.isFile
     },
-    isRootUser() {
-      return this.$store.getters['user/getIsRoot']
+    userIsAdminOrUp() {
+      return this.$store.getters['user/getIsAdminOrUp']
     },
     isMissing() {
       return !!this.libraryItem && !!this.libraryItem.isMissing
@@ -142,19 +146,23 @@ export default {
           this.rescanning = false
         })
     },
-    submitForm() {
+    async saveAndClose() {
+      const wasUpdated = await this.save()
+      if (wasUpdated !== null) this.$emit('close')
+    },
+    async save() {
       if (this.isProcessing) {
-        return
+        return null
       }
       if (!this.$refs.itemDetailsEdit) {
-        return
+        return null
       }
       var updatedDetails = this.$refs.itemDetailsEdit.getDetails()
       if (!updatedDetails.hasChanges) {
         this.$toast.info('No changes were made')
-        return
+        return false
       }
-      this.updateDetails(updatedDetails)
+      return this.updateDetails(updatedDetails)
     },
     async updateDetails(updatedDetails) {
       this.isProcessing = true
@@ -166,11 +174,12 @@ export default {
       if (updateResult) {
         if (updateResult.updated) {
           this.$toast.success('Item details updated')
-          // this.$emit('close')
+          return true
         } else {
           this.$toast.info('No updates were necessary')
         }
       }
+      return false
     },
     removeItem() {
       if (confirm(`Are you sure you want to remove this item?\n\n*Does not delete your files, only removes the item from audiobookshelf`)) {
@@ -224,8 +233,8 @@ export default {
 </script>
 
 <style scoped>
-.details-form-wrapper {
-  height: calc(100% - 70px);
-  max-height: calc(100% - 70px);
+#formWrapper {
+  height: calc(100% - 80px);
+  max-height: calc(100% - 80px);
 }
 </style>

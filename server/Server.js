@@ -30,20 +30,22 @@ const LogManager = require('./managers/LogManager')
 const BackupManager = require('./managers/BackupManager')
 const PlaybackSessionManager = require('./managers/PlaybackSessionManager')
 const PodcastManager = require('./managers/PodcastManager')
+const AudioMetadataMangaer = require('./managers/AudioMetadataManager')
+const RssFeedManager = require('./managers/RssFeedManager')
 
 class Server {
-  constructor(PORT, HOST, UID, GID, CONFIG_PATH, METADATA_PATH, AUDIOBOOK_PATH) {
+  constructor(SOURCE, PORT, HOST, UID, GID, CONFIG_PATH, METADATA_PATH) {
     this.Port = PORT
     this.Host = HOST
+    global.Source = SOURCE
     global.Uid = isNaN(UID) ? 0 : Number(UID)
     global.Gid = isNaN(GID) ? 0 : Number(GID)
     global.ConfigPath = Path.normalize(CONFIG_PATH)
-    global.AudiobookPath = Path.normalize(AUDIOBOOK_PATH)
     global.MetadataPath = Path.normalize(METADATA_PATH)
+
     // Fix backslash if not on Windows
     if (process.platform !== 'win32') {
       global.ConfigPath = global.ConfigPath.replace(/\\/g, '/')
-      global.AudiobookPath = global.AudiobookPath.replace(/\\/g, '/')
       global.MetadataPath = global.MetadataPath.replace(/\\/g, '/')
     }
 
@@ -54,10 +56,6 @@ class Server {
     if (!fs.pathExistsSync(global.MetadataPath)) {
       fs.mkdirSync(global.MetadataPath)
       filePerms.setDefaultDirSync(global.MetadataPath, false)
-    }
-    if (!fs.pathExistsSync(global.AudiobookPath)) {
-      fs.mkdirSync(global.AudiobookPath)
-      filePerms.setDefaultDirSync(global.AudiobookPath, false)
     }
 
     this.db = new Db()
@@ -72,11 +70,13 @@ class Server {
     this.playbackSessionManager = new PlaybackSessionManager(this.db, this.emitter.bind(this), this.clientEmitter.bind(this))
     this.coverManager = new CoverManager(this.db, this.cacheManager)
     this.podcastManager = new PodcastManager(this.db, this.watcher, this.emitter.bind(this))
+    this.audioMetadataManager = new AudioMetadataMangaer(this.db, this.emitter.bind(this), this.clientEmitter.bind(this))
+    this.rssFeedManager = new RssFeedManager(this.db, this.emitter.bind(this))
 
     this.scanner = new Scanner(this.db, this.coverManager, this.emitter.bind(this))
 
     // Routers
-    this.apiRouter = new ApiRouter(this.db, this.auth, this.scanner, this.playbackSessionManager, this.abMergeManager, this.coverManager, this.backupManager, this.watcher, this.cacheManager, this.podcastManager, this.emitter.bind(this), this.clientEmitter.bind(this))
+    this.apiRouter = new ApiRouter(this.db, this.auth, this.scanner, this.playbackSessionManager, this.abMergeManager, this.coverManager, this.backupManager, this.watcher, this.cacheManager, this.podcastManager, this.audioMetadataManager, this.rssFeedManager, this.emitter.bind(this), this.clientEmitter.bind(this))
     this.hlsRouter = new HlsRouter(this.db, this.auth, this.playbackSessionManager, this.emitter.bind(this))
     this.staticRouter = new StaticRouter(this.db)
 
@@ -136,10 +136,9 @@ class Server {
       await this.db.init()
     }
 
-    this.auth.init()
-
     await this.checkUserMediaProgress() // Remove invalid user item progress
     await this.purgeMetadata() // Remove metadata folders without library item
+    await this.cacheManager.ensureCachePaths()
 
     await this.backupManager.init()
     await this.logManager.init()
@@ -196,19 +195,56 @@ class Server {
       res.sendFile(fullPath)
     })
 
+    // RSS Feed temp route
+    app.get('/feed/:id', (req, res) => {
+      Logger.info(`[Server] requesting rss feed ${req.params.id}`)
+      this.rssFeedManager.getFeed(req, res)
+    })
+    app.get('/feed/:id/cover', (req, res) => {
+      this.rssFeedManager.getFeedCover(req, res)
+    })
+    app.get('/feed/:id/item/*', (req, res) => {
+      Logger.info(`[Server] requesting rss feed ${req.params.id}`)
+      this.rssFeedManager.getFeedItem(req, res)
+    })
+
     // Client dynamic routes
-    app.get('/item/:id', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/audiobook/:id/edit', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/library/:library', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/library/:library/search', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/library/:library/bookshelf/:id?', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/library/:library/authors', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/library/:library/series/:id?', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/config/users/:id', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
-    app.get('/collection/:id', (req, res) => res.sendFile(Path.join(distPath, 'index.html')))
+    const dyanimicRoutes = [
+      '/item/:id',
+      '/item/:id/manage',
+      '/item/:id/chapters',
+      '/audiobook/:id/edit',
+      '/library/:library',
+      '/library/:library/search',
+      '/library/:library/bookshelf/:id?',
+      '/library/:library/authors',
+      '/library/:library/series/:id?',
+      '/config/users/:id',
+      '/collection/:id'
+    ]
+    dyanimicRoutes.forEach((route) => app.get(route, (req, res) => res.sendFile(Path.join(distPath, 'index.html'))))
 
     app.post('/login', this.getLoginRateLimiter(), (req, res) => this.auth.login(req, res))
     app.post('/logout', this.authMiddleware.bind(this), this.logout.bind(this))
+    app.post('/init', (req, res) => {
+      if (this.db.hasRootUser) {
+        Logger.error(`[Server] attempt to init server when server already has a root user`)
+        return res.sendStatus(500)
+      }
+      this.initializeServer(req, res)
+    })
+    app.get('/status', (req, res) => {
+      // status check for client to see if server has been initialized
+      // server has been initialized if a root user exists
+      const payload = {
+        isInit: this.db.hasRootUser
+      }
+      if (!payload.isInit) {
+        payload.ConfigPath = global.ConfigPath
+        payload.MetadataPath = global.MetadataPath
+      }
+      res.json(payload)
+    })
     app.get('/ping', (req, res) => {
       Logger.info('Recieved ping')
       res.json({ success: true })
@@ -269,6 +305,17 @@ class Server {
         }
       })
     })
+  }
+
+  async initializeServer(req, res) {
+    Logger.info(`[Server] Initializing new server`)
+    const newRoot = req.body.newRoot
+    let rootPash = newRoot.password ? await this.auth.hashPass(newRoot.password) : ''
+    if (!rootPash) Logger.warn(`[Server] Creating root user with no password`)
+    let rootToken = await this.auth.generateAccessToken({ userId: 'root' })
+    await this.db.createRootUser(newRoot.username, rootPash, rootToken)
+
+    res.sendStatus(200)
   }
 
   async filesChanged(fileUpdates) {
@@ -411,7 +458,6 @@ class Server {
     const initialPayload = {
       // TODO: this is sent with user auth now, update mobile app to use that then remove this
       serverSettings: this.db.serverSettings.toJSON(),
-      audiobookPath: global.AudiobookPath,
       metadataPath: global.MetadataPath,
       configPath: global.ConfigPath,
       user: client.user.toJSONForBrowser(),

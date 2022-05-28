@@ -153,6 +153,30 @@ class Book {
     return hasUpdates
   }
 
+  updateChapters(chapters) {
+    var hasUpdates = this.chapters.length !== chapters.length
+    if (hasUpdates) {
+      this.chapters = chapters.map(ch => ({
+        id: ch.id,
+        start: ch.start,
+        end: ch.end,
+        title: ch.title
+      }))
+    } else {
+      for (let i = 0; i < this.chapters.length; i++) {
+        const currChapter = this.chapters[i]
+        const newChapter = chapters[i]
+        if (!hasUpdates && (currChapter.title !== newChapter.title || currChapter.start !== newChapter.start || currChapter.end !== newChapter.end)) {
+          hasUpdates = true
+        }
+        this.chapters[i].title = newChapter.title
+        this.chapters[i].start = newChapter.start
+        this.chapters[i].end = newChapter.end
+      }
+    }
+    return hasUpdates
+  }
+
   updateCover(coverPath) {
     coverPath = coverPath.replace(/\\/g, '/')
     if (this.coverPath === coverPath) return false
@@ -201,6 +225,7 @@ class Book {
   // Look for desc.txt, reader.txt, metadata.abs and opf file then update details if found
   async syncMetadataFiles(textMetadataFiles, opfMetadataOverrideDetails) {
     var metadataUpdatePayload = {}
+    var tagsUpdated = false
 
     var descTxt = textMetadataFiles.find(lf => lf.metadata.filename === 'desc.txt')
     if (descTxt) {
@@ -240,8 +265,13 @@ class Book {
         var opfMetadata = await parseOpfMetadataXML(xmlText)
         if (opfMetadata) {
           for (const key in opfMetadata) {
-            // Add genres only if genres are empty
-            if (key === 'genres') {
+
+            if (key === 'tags') { // Add tags only if tags are empty
+              if (opfMetadata.tags.length && (!this.tags.length || opfMetadataOverrideDetails)) {
+                this.tags = opfMetadata.tags
+                tagsUpdated = true
+              }
+            } else if (key === 'genres') { // Add genres only if genres are empty
               if (opfMetadata.genres.length && (!this.metadata.genres.length || opfMetadataOverrideDetails)) {
                 metadataUpdatePayload[key] = opfMetadata.genres
               }
@@ -266,9 +296,9 @@ class Book {
     }
 
     if (Object.keys(metadataUpdatePayload).length) {
-      return this.metadata.update(metadataUpdatePayload)
+      return this.metadata.update(metadataUpdatePayload) || tagsUpdated
     }
-    return false
+    return tagsUpdated
   }
 
   searchQuery(query) {
@@ -381,19 +411,27 @@ class Book {
         // If audio file has chapters use chapters
         if (file.chapters && file.chapters.length) {
           file.chapters.forEach((chapter) => {
-            var chapterDuration = chapter.end - chapter.start
-            if (chapterDuration > 0) {
-              var title = `Chapter ${currChapterId}`
-              if (chapter.title) {
-                title += ` (${chapter.title})`
+            if (chapter.start > this.duration) {
+              Logger.warn(`[Book] Invalid chapter start time > duration`)
+            } else {
+              var chapterAlreadyExists = this.chapters.find(ch => ch.start === chapter.start)
+              if (!chapterAlreadyExists) {
+                var chapterDuration = chapter.end - chapter.start
+                if (chapterDuration > 0) {
+                  var title = `Chapter ${currChapterId}`
+                  if (chapter.title) {
+                    title += ` (${chapter.title})`
+                  }
+                  var endTime = Math.min(this.duration, currStartTime + chapterDuration)
+                  this.chapters.push({
+                    id: currChapterId++,
+                    start: currStartTime,
+                    end: endTime,
+                    title
+                  })
+                  currStartTime += chapterDuration
+                }
               }
-              this.chapters.push({
-                id: currChapterId++,
-                start: currStartTime,
-                end: currStartTime + chapterDuration,
-                title
-              })
-              currStartTime += chapterDuration
             }
           })
         } else if (file.duration) {

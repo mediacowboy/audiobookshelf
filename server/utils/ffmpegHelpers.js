@@ -48,9 +48,32 @@ async function writeMetadataFile(libraryItem, outputPath) {
     `artist=${libraryItem.media.metadata.authorName}`,
     `album_artist=${libraryItem.media.metadata.authorName}`,
     `date=${libraryItem.media.metadata.publishedYear || ''}`,
-    `description=${libraryItem.media.metadata.description}`,
-    `genre=${libraryItem.media.metadata.genres.join(';')}`
+    `description=${libraryItem.media.metadata.description || ''}`,
+    `genre=${libraryItem.media.metadata.genres.join(';')}`,
+    `performer=${libraryItem.media.metadata.narratorName || ''}`,
+    `encoded_by=audiobookshelf:${package.version}`
   ]
+
+  if (libraryItem.media.metadata.asin) {
+    inputstrs.push(`ASIN=${libraryItem.media.metadata.asin}`)
+  }
+  if (libraryItem.media.metadata.isbn) {
+    inputstrs.push(`ISBN=${libraryItem.media.metadata.isbn}`)
+  }
+  if (libraryItem.media.metadata.language) {
+    inputstrs.push(`language=${libraryItem.media.metadata.language}`)
+  }
+  if (libraryItem.media.metadata.series.length) {
+    // Only uses first series
+    var firstSeries = libraryItem.media.metadata.series[0]
+    inputstrs.push(`series=${firstSeries.name}`)
+    if (firstSeries.sequence) {
+      inputstrs.push(`series-part=${firstSeries.sequence}`)
+    }
+  }
+  if (libraryItem.media.metadata.subtitle) {
+    inputstrs.push(`subtitle=${libraryItem.media.metadata.subtitle}`)
+  }
 
   if (libraryItem.media.chapters) {
     libraryItem.media.chapters.forEach((chap) => {
@@ -97,9 +120,6 @@ module.exports.extractCoverArt = extractCoverArt
 
 //This should convert based on the output file extension as well
 async function resizeImage(filePath, outputPath, width, height) {
-  var dirname = Path.dirname(outputPath);
-  await fs.ensureDir(dirname);
-
   return new Promise((resolve) => {
     var ffmpeg = Ffmpeg(filePath)
     ffmpeg.addOption(['-vf', `scale=${width || -1}:${height || -1}`])

@@ -22,6 +22,7 @@ class PodcastManager {
     this.currentDownload = null
 
     this.episodeScheduleTask = null
+    this.failedCheckMap = {}
   }
 
   get serverSettings() {
@@ -154,7 +155,10 @@ class PodcastManager {
   schedulePodcastEpisodeCron() {
     try {
       Logger.debug(`[PodcastManager] Scheduled podcast episode check cron "${this.serverSettings.podcastEpisodeSchedule}"`)
-      this.episodeScheduleTask = cron.schedule(this.serverSettings.podcastEpisodeSchedule, this.checkForNewEpisodes.bind(this))
+      this.episodeScheduleTask = cron.schedule(this.serverSettings.podcastEpisodeSchedule, () => {
+        Logger.debug(`[PodcastManager] Running cron`)
+        this.checkForNewEpisodes()
+      })
     } catch (error) {
       Logger.error(`[PodcastManager] Failed to schedule podcast cron ${this.serverSettings.podcastEpisodeSchedule}`, error)
     }
@@ -171,21 +175,42 @@ class PodcastManager {
   async checkForNewEpisodes() {
     var podcastsWithAutoDownload = this.db.libraryItems.filter(li => li.mediaType === 'podcast' && li.media.autoDownloadEpisodes)
     if (!podcastsWithAutoDownload.length) {
+      Logger.info(`[PodcastManager] checkForNewEpisodes - No podcasts with auto download set`)
       this.cancelCron()
       return
     }
+    Logger.debug(`[PodcastManager] checkForNewEpisodes - Checking ${podcastsWithAutoDownload.length} Podcasts`)
 
     for (const libraryItem of podcastsWithAutoDownload) {
       const lastEpisodeCheckDate = new Date(libraryItem.media.lastEpisodeCheck || 0)
-      Logger.info(`[PodcastManager] checkForNewEpisodes Cron for "${libraryItem.media.metadata.title}" - Last episode check: ${lastEpisodeCheckDate}`)
-      var newEpisodes = await this.checkPodcastForNewEpisodes(libraryItem)
+      const latestEpisodePublishedAt = libraryItem.media.latestEpisodePublished
+      Logger.info(`[PodcastManager] checkForNewEpisodes: "${libraryItem.media.metadata.title}" | Last check: ${lastEpisodeCheckDate} | ${latestEpisodePublishedAt ? `Latest episode pubDate: ${new Date(latestEpisodePublishedAt)}` : 'No latest episode'}`)
+
+      // Use latest episode pubDate if exists OR fallback to using lastEpisodeCheckDate
+      //    lastEpisodeCheckDate will be the current time when adding a new podcast
+      const dateToCheckForEpisodesAfter = latestEpisodePublishedAt || lastEpisodeCheckDate
+      Logger.debug(`[PodcastManager] checkForNewEpisodes: "${libraryItem.media.metadata.title}" checking for episodes after ${new Date(dateToCheckForEpisodesAfter)}`)
+
+      var newEpisodes = await this.checkPodcastForNewEpisodes(libraryItem, dateToCheckForEpisodesAfter)
+      Logger.debug(`[PodcastManager] checkForNewEpisodes checked result ${newEpisodes ? newEpisodes.length : 'N/A'}`)
 
       if (!newEpisodes) { // Failed
-        libraryItem.media.autoDownloadEpisodes = false
+        // Allow up to 3 failed attempts before disabling auto download
+        if (!this.failedCheckMap[libraryItem.id]) this.failedCheckMap[libraryItem.id] = 0
+        this.failedCheckMap[libraryItem.id]++
+        if (this.failedCheckMap[libraryItem.id] > 2) {
+          Logger.error(`[PodcastManager] checkForNewEpisodes 3 failed attempts at checking episodes for "${libraryItem.media.metadata.title}" - disabling auto download`)
+          libraryItem.media.autoDownloadEpisodes = false
+          delete this.failedCheckMap[libraryItem.id]
+        } else {
+          Logger.warn(`[PodcastManager] checkForNewEpisodes ${this.failedCheckMap[libraryItem.id]} failed attempts at checking episodes for "${libraryItem.media.metadata.title}"`)
+        }
       } else if (newEpisodes.length) {
+        delete this.failedCheckMap[libraryItem.id]
         Logger.info(`[PodcastManager] Found ${newEpisodes.length} new episodes for podcast "${libraryItem.media.metadata.title}" - starting download`)
         this.downloadPodcastEpisodes(libraryItem, newEpisodes)
       } else {
+        delete this.failedCheckMap[libraryItem.id]
         Logger.debug(`[PodcastManager] No new episodes for "${libraryItem.media.metadata.title}"`)
       }
 
@@ -196,18 +221,19 @@ class PodcastManager {
     }
   }
 
-  async checkPodcastForNewEpisodes(podcastLibraryItem) {
+  async checkPodcastForNewEpisodes(podcastLibraryItem, dateToCheckForEpisodesAfter) {
     if (!podcastLibraryItem.media.metadata.feedUrl) {
-      Logger.error(`[PodcastManager] checkPodcastForNewEpisodes no feed url for ${podcastLibraryItem.media.metadata.title} (ID: ${podcastLibraryItem.id}) - disabling auto download`)
+      Logger.error(`[PodcastManager] checkPodcastForNewEpisodes no feed url for ${podcastLibraryItem.media.metadata.title} (ID: ${podcastLibraryItem.id})`)
       return false
     }
     var feed = await this.getPodcastFeed(podcastLibraryItem.media.metadata.feedUrl)
     if (!feed || !feed.episodes) {
-      Logger.error(`[PodcastManager] checkPodcastForNewEpisodes invalid feed payload for ${podcastLibraryItem.media.metadata.title} (ID: ${podcastLibraryItem.id}) - disabling auto download`)
+      Logger.error(`[PodcastManager] checkPodcastForNewEpisodes invalid feed payload for ${podcastLibraryItem.media.metadata.title} (ID: ${podcastLibraryItem.id})`, feed)
       return false
     }
+
     // Filter new and not already has
-    var newEpisodes = feed.episodes.filter(ep => ep.publishedAt > podcastLibraryItem.media.lastEpisodeCheck && !podcastLibraryItem.media.checkHasEpisodeByFeedUrl(ep.enclosure.url))
+    var newEpisodes = feed.episodes.filter(ep => ep.publishedAt > dateToCheckForEpisodesAfter && !podcastLibraryItem.media.checkHasEpisodeByFeedUrl(ep.enclosure.url))
     // Max new episodes for safety = 3
     newEpisodes = newEpisodes.slice(0, 3)
     return newEpisodes
@@ -216,7 +242,7 @@ class PodcastManager {
   async checkAndDownloadNewEpisodes(libraryItem) {
     const lastEpisodeCheckDate = new Date(libraryItem.media.lastEpisodeCheck || 0)
     Logger.info(`[PodcastManager] checkAndDownloadNewEpisodes for "${libraryItem.media.metadata.title}" - Last episode check: ${lastEpisodeCheckDate}`)
-    var newEpisodes = await this.checkPodcastForNewEpisodes(libraryItem)
+    var newEpisodes = await this.checkPodcastForNewEpisodes(libraryItem, libraryItem.media.lastEpisodeCheck)
     if (newEpisodes.length) {
       Logger.info(`[PodcastManager] Found ${newEpisodes.length} new episodes for podcast "${libraryItem.media.metadata.title}" - starting download`)
       this.downloadPodcastEpisodes(libraryItem, newEpisodes)
@@ -233,11 +259,13 @@ class PodcastManager {
   }
 
   getPodcastFeed(feedUrl) {
-    return axios.get(feedUrl).then(async (data) => {
+    Logger.debug(`[PodcastManager] getPodcastFeed for "${feedUrl}"`)
+    return axios.get(feedUrl, { timeout: 5000 }).then(async (data) => {
       if (!data || !data.data) {
         Logger.error('Invalid podcast feed request response')
         return false
       }
+      Logger.debug(`[PodcastManager] getPodcastFeed for "${feedUrl}" success - parsing xml`)
       var payload = await parsePodcastRssFeedXml(data.data)
       if (!payload) {
         return false

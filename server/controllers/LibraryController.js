@@ -42,6 +42,7 @@ class LibraryController {
     newLibraryPayload.displayOrder = this.db.libraries.length + 1
     library.setData(newLibraryPayload)
     await this.db.insertEntity('library', library)
+    // TODO: Only emit to users that have access
     this.emitter('library_added', library.toJSON())
 
     // Add library watcher
@@ -85,13 +86,17 @@ class LibraryController {
         return f
       })
       for (var path of newFolderPaths) {
-        var success = await fs.ensureDir(path).then(() => true).catch((error) => {
-          Logger.error(`[LibraryController] Failed to ensure folder dir "${path}"`, error)
-          return false
-        })
-        if (!success) {
-          return res.status(400).send(`Invalid folder directory "${path}"`)
-        } else {
+        var pathExists = await fs.pathExists(path)
+        if (!pathExists) {
+          // Ensure dir will recursively create directories which might be preferred over mkdir
+          var success = await fs.ensureDir(path).then(() => true).catch((error) => {
+            Logger.error(`[LibraryController] Failed to ensure folder dir "${path}"`, error)
+            return false
+          })
+          if (!success) {
+            return res.status(400).send(`Invalid folder directory "${path}"`)
+          }
+          // Set permissions on newly created path
           await filePerms.setDefault(path)
         }
       }
@@ -320,7 +325,7 @@ class LibraryController {
 
   // PATCH: Change the order of libraries
   async reorder(req, res) {
-    if (!req.user.isRoot) {
+    if (!req.user.isAdminOrUp) {
       Logger.error('[LibraryController] ReorderLibraries invalid user', req.user)
       return res.sendStatus(403)
     }
@@ -457,7 +462,7 @@ class LibraryController {
   }
 
   async matchAll(req, res) {
-    if (!req.user.isRoot) {
+    if (!req.user.isAdminOrUp) {
       Logger.error(`[LibraryController] Non-root user attempted to match library items`, req.user)
       return res.sendStatus(403)
     }
@@ -467,7 +472,7 @@ class LibraryController {
 
   // GET: api/scan (Root)
   async scan(req, res) {
-    if (!req.user.isRoot) {
+    if (!req.user.isAdminOrUp) {
       Logger.error(`[LibraryController] Non-root user attempted to scan library`, req.user)
       return res.sendStatus(403)
     }

@@ -33,7 +33,7 @@
 
               <p v-if="isPodcast" class="mb-2 mt-0.5 text-gray-200 text-lg md:text-xl">by {{ podcastAuthor || 'Unknown' }}</p>
               <p v-else-if="authors.length" class="mb-2 mt-0.5 text-gray-200 text-lg md:text-xl">
-                by <nuxt-link v-for="(author, index) in authors" :key="index" :to="`/library/${libraryId}/bookshelf?filter=authors.${$encode(author.id)}`" class="hover:underline">{{ author.name }}<span v-if="index < authors.length - 1">,&nbsp;</span></nuxt-link>
+                by <nuxt-link v-for="(author, index) in authors" :key="index" :to="`/author/${author.id}`" class="hover:underline">{{ author.name }}<span v-if="index < authors.length - 1">,&nbsp;</span></nuxt-link>
               </p>
               <p v-else class="mb-2 mt-0.5 text-gray-200 text-xl">by Unknown</p>
 
@@ -92,7 +92,8 @@
           <!-- Alerts -->
           <div v-show="showExperimentalReadAlert" class="bg-error p-4 rounded-xl flex items-center">
             <span class="material-icons text-2xl">warning_amber</span>
-            <p class="ml-4">Book has no audio tracks but has valid ebook files. The e-reader is experimental and can be turned on in config.</p>
+            <p v-if="userIsAdminOrUp" class="ml-4">Book has no audio tracks but has an ebook. The experimental e-reader can be enabled in config.</p>
+            <p v-else class="ml-4">Book has no audio tracks but has an ebook. The experimental e-reader must be enabled by a server admin.</p>
           </div>
 
           <!-- Podcast episode downloads queue -->
@@ -135,7 +136,7 @@
               {{ isMissing ? 'Missing' : 'Incomplete' }}
             </ui-btn>
 
-            <ui-btn v-if="showExperimentalFeatures && ebookFile" color="info" :padding-x="4" small class="flex items-center h-9 mr-2" @click="openEbook">
+            <ui-btn v-if="showReadButton" color="info" :padding-x="4" small class="flex items-center h-9 mr-2" @click="openEbook">
               <span class="material-icons -ml-2 pr-2 text-white">auto_stories</span>
               Read
             </ui-btn>
@@ -156,6 +157,11 @@
             <ui-tooltip v-if="isPodcast && userIsAdminOrUp" text="Find Episodes" direction="top">
               <ui-icon-btn icon="search" class="mx-0.5" :loading="fetchingRSSFeed" outlined @click="findEpisodesClick" />
             </ui-tooltip>
+
+            <!-- Experimental RSS feed open -->
+            <ui-tooltip v-if="showRssFeedBtn" text="Open RSS Feed" direction="top">
+              <ui-icon-btn icon="rss_feed" class="mx-0.5" :bg-color="rssFeedUrl ? 'success' : 'primary'" outlined @click="clickRSSFeed" />
+            </ui-tooltip>
           </div>
 
           <div class="my-4 max-w-2xl">
@@ -172,12 +178,15 @@
 
           <tables-podcast-episodes-table v-if="isPodcast" :library-item="libraryItem" />
 
+          <tables-chapters-table v-if="chapters.length" :library-item="libraryItem" class="mt-6" />
+
           <tables-library-files-table v-if="libraryFiles.length" :is-missing="isMissing" :library-item-id="libraryItemId" :files="libraryFiles" class="mt-6" />
         </div>
       </div>
     </div>
 
     <modals-podcast-episode-feed v-model="showPodcastEpisodeFeed" :library-item="libraryItem" :episodes="podcastFeedEpisodes" />
+    <modals-rssfeed-view-modal v-model="showRssFeedModal" :library-item="libraryItem" :feed-url="rssFeedUrl" />
   </div>
 </template>
 
@@ -189,7 +198,7 @@ export default {
     }
 
     // Include episode downloads for podcasts
-    var item = await app.$axios.$get(`/api/items/${params.id}?expanded=1&include=authors,downloads`).catch((error) => {
+    var item = await app.$axios.$get(`/api/items/${params.id}?expanded=1&include=authors,downloads,rssfeed`).catch((error) => {
       console.error('Failed', error)
       return false
     })
@@ -198,7 +207,8 @@ export default {
       return redirect('/')
     }
     return {
-      libraryItem: item
+      libraryItem: item,
+      rssFeedUrl: item.rssFeedUrl || null
     }
   },
   data() {
@@ -209,10 +219,17 @@ export default {
       showPodcastEpisodeFeed: false,
       podcastFeedEpisodes: [],
       episodesDownloading: [],
-      episodeDownloadsQueued: []
+      episodeDownloadsQueued: [],
+      showRssFeedModal: false
     }
   },
   computed: {
+    showExperimentalFeatures() {
+      return this.$store.state.showExperimentalFeatures
+    },
+    enableEReader() {
+      return this.$store.getters['getServerSetting']('enableEReader')
+    },
     userIsAdminOrUp() {
       return this.$store.getters['user/getIsAdminOrUp']
     },
@@ -230,9 +247,6 @@ export default {
     },
     isDeveloperMode() {
       return this.$store.state.developerMode
-    },
-    showExperimentalFeatures() {
-      return this.$store.state.showExperimentalFeatures
     },
     isPodcast() {
       return this.libraryItem.mediaType === 'podcast'
@@ -252,6 +266,9 @@ export default {
       if (this.isPodcast) return this.podcastEpisodes.length
       return this.tracks.length
     },
+    showReadButton() {
+      return this.ebookFile && (this.showExperimentalFeatures || this.enableEReader)
+    },
     libraryId() {
       return this.libraryItem.libraryId
     },
@@ -266,6 +283,9 @@ export default {
     },
     mediaMetadata() {
       return this.media.metadata || {}
+    },
+    chapters() {
+      return this.media.chapters || []
     },
     tracks() {
       return this.media.tracks || []
@@ -329,7 +349,7 @@ export default {
       return this.media.ebookFile
     },
     showExperimentalReadAlert() {
-      return !this.tracks.length && this.ebookFile && !this.showExperimentalFeatures
+      return !this.tracks.length && this.ebookFile && !this.showExperimentalFeatures && !this.enableEReader
     },
     description() {
       return this.mediaMetadata.description || ''
@@ -368,6 +388,12 @@ export default {
     },
     userCanDownload() {
       return this.$store.getters['user/getUserCanDownload']
+    },
+    showRssFeedBtn() {
+      if (!this.rssFeedUrl && !this.podcastEpisodes.length && !this.tracks.length) return false // Cannot open RSS feed with no episodes/tracks
+
+      // If rss feed is open then show feed url to users otherwise just show to admins
+      return this.userIsAdminOrUp || this.rssFeedUrl
     }
   },
   methods: {
@@ -478,6 +504,9 @@ export default {
       this.$store.commit('setSelectedLibraryItem', this.libraryItem)
       this.$store.commit('globals/setShowUserCollectionsModal', true)
     },
+    clickRSSFeed() {
+      this.showRssFeedModal = true
+    },
     episodeDownloadQueued(episodeDownload) {
       if (episodeDownload.libraryItemId === this.libraryItemId) {
         this.episodeDownloadsQueued.push(episodeDownload)
@@ -494,6 +523,18 @@ export default {
         this.episodeDownloadsQueued = this.episodeDownloadsQueued.filter((d) => d.id !== episodeDownload.id)
         this.episodesDownloading = this.episodesDownloading.filter((d) => d.id !== episodeDownload.id)
       }
+    },
+    rssFeedOpen(data) {
+      if (data.libraryItemId === this.libraryItemId) {
+        console.log('RSS Feed Opened', data)
+        this.rssFeedUrl = data.feedUrl
+      }
+    },
+    rssFeedClosed(data) {
+      if (data.libraryItemId === this.libraryItemId) {
+        console.log('RSS Feed Closed', data)
+        this.rssFeedUrl = null
+      }
     }
   },
   mounted() {
@@ -506,12 +547,16 @@ export default {
       this.$store.commit('libraries/setCurrentLibrary', this.libraryId)
     }
     this.$root.socket.on('item_updated', this.libraryItemUpdated)
+    this.$root.socket.on('rss_feed_open', this.rssFeedOpen)
+    this.$root.socket.on('rss_feed_closed', this.rssFeedClosed)
     this.$root.socket.on('episode_download_queued', this.episodeDownloadQueued)
     this.$root.socket.on('episode_download_started', this.episodeDownloadStarted)
     this.$root.socket.on('episode_download_finished', this.episodeDownloadFinished)
   },
   beforeDestroy() {
     this.$root.socket.off('item_updated', this.libraryItemUpdated)
+    this.$root.socket.off('rss_feed_open', this.rssFeedOpen)
+    this.$root.socket.off('rss_feed_closed', this.rssFeedClosed)
     this.$root.socket.off('episode_download_queued', this.episodeDownloadQueued)
     this.$root.socket.off('episode_download_started', this.episodeDownloadStarted)
     this.$root.socket.off('episode_download_finished', this.episodeDownloadFinished)
